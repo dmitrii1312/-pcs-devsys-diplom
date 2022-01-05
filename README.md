@@ -186,6 +186,11 @@ $ sudo systemctl enable nginx
 
 ## Страница сервера nginx в браузере хоста не содержит предупреждений
 
+На машине с браузером нужно добавить в файл C:\Windows\System32\drivers\etc\hosts следующую строку:
+```
+192.168.22.102 nginx.example.com
+```
+
 ![image](https://user-images.githubusercontent.com/93075740/148146164-10f8642e-4ff7-4944-a896-189c82a22f83.png)
 
 ## Скрипт генерации нового сертификата работает
