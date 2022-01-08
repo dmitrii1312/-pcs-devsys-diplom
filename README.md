@@ -82,6 +82,7 @@ writing new private key to 'tls.key'
 -----
 Vault TLS key and self-signed certificate have been generated in '/opt/vault/tls'.
 ```
+После установки нужно отредактировать конфигурацию сервиса: закомментировать HTTPS listener и раскомментировать HTTP listener
 ```
 $ vi /etc/vault.d/vault.hcl
 ```
@@ -96,11 +97,13 @@ listener "tcp" {
   tls_disable = 1
 }
 ```
+Нужно включить и запустить сервис
 ```
 $ sudo systemctl enable vault
 $ sudo systemctl start vault
 $ export VAULT_ADDR=http://127.0.0.1:8200
 ```
+При первом запуске получаем ключи распечатки и начальный токен root
 ```
 $ vault operator init
 Unseal Key 1: sLGLOX0A2nhoWdWsGyV2yPlUk4Kg3EO5H37gKxefAm4a
@@ -111,18 +114,35 @@ Unseal Key 5: kgb/zUMxI2PNWYg/+BunTYe7KrRaxjOCJsWC8HgID/b8
 
 Initial Root Token: s.gQdRbL11wZGDFQnaZilk7InH
 ```
+Сохраняем ключи и токен в файлах, для распечатки достаточно три ключа
+```
+$ sudo cat /root/.vault-keys
+sLGLOX0A2nhoWdWsGyV2yPlUk4Kg3EO5H37gKxefAm4a
+q+N6nidUBVhFSjw99tiZ6C3s4SYcGDMM+CdvEa+vCklO
+ei5ZIjbT1P+QDHqrn0eb2pN/Mp3r9LBKKqkK5Lsr819o
+```
+```
+$ sudo cat /root/.vault-token
+s.gQdRbL11wZGDFQnaZilk7InH
+```
+Для автоматической распечатки подготовлен скрипт
 ```
 $ sudo vi /usr/local/sbin/unseal.sh
 #!/bin/bash
 source /etc/default/unseal
-vault operator unseal sLGLOX0A2nhoWdWsGyV2yPlUk4Kg3EO5H37gKxefAm4a
-vault operator unseal q+N6nidUBVhFSjw99tiZ6C3s4SYcGDMM+CdvEa+vCklO
-vault operator unseal ei5ZIjbT1P+QDHqrn0eb2pN/Mp3r9LBKKqkK5Lsr819o
+for i in `cat /root/.vault-keys`; do vault operator unseal $i; done
+vault status >/dev/null 2>&1
+if [[ ! $? == "0" ]]
+then
+  echo "Error unsealing vault"
+  exit 1
+fi
 ```
 ```
 $ sudo vi /etc/default/unseal
 export VAULT_ADDR=http://127.0.0.1:8200
 ```
+Создан юнит-файл, чтобы скрипт запускался при старте системы, но после сервиса vault
 ```
 $ sudo vi /etc/systemd/system/unseal.service
 [Unit]
@@ -136,9 +156,14 @@ ExecStart=/usr/local/sbin/unseal.sh
 [Install]
 WantedBy=multi-user.target
 ```
+Включение и запуск сервиса распечатки
 ```
 $ sudo systemctl daemon-reload
 $ sudo systemctl start unseal
+$ sudo systemctl enable unseal
+```
+Настройка PKI и выпуск необходимых сертификатов
+```
 $ export VAULT_TOKEN=s.gQdRbL11wZGDFQnaZilk7InH
 $ vault secrets enable pki
 Success! Enabled the pki secrets engine at: pki/
@@ -201,12 +226,25 @@ $ sudo systemctl enable nginx
 ```
 #!/bin/bash
 export VAULT_ADDR=http://127.0.0.1:8200
-export VAULT_TOKEN=s.gQdRbL11wZGDFQnaZilk7InH
-vault write -format=json pki_int/issue/example-dot-com common_name="nginx.example.com" ttl="744h" > /tmp/cert.json
-cat /tmp/cert.json | jq -r '.data.private_key' > /etc/nginx/ssl/key.pem
-cat /tmp/cert.json | jq -r '.data.certificate' > /etc/nginx/ssl/cert.pem
-cat /tmp/cert.json | jq -r '.data.issuing_ca' >> /etc/nginx/ssl/cert.pem
-systemctl restart nginx
+export VAULT_TOKEN=$(cat /root/.vault-token)
+vault status > /dev/null 2>&1
+if [[ $? == "0" ]]
+then
+  vault write -format=json pki_int/issue/example-dot-com common_name="nginx.example.com" ttl="744h" > /tmp/cert.json
+  if [[ $? == "0" ]]
+  then 
+    cat /tmp/cert.json | jq -r '.data.private_key' > /etc/nginx/ssl/key.pem
+    cat /tmp/cert.json | jq -r '.data.certificate' > /etc/nginx/ssl/cert.pem
+    cat /tmp/cert.json | jq -r '.data.issuing_ca' >> /etc/nginx/ssl/cert.pem
+    systemctl restart nginx
+  else
+    echo "Error while generating keys"
+    exit 1
+  fi
+else
+  echo "There are problems with vault"
+  exit 1
+fi
 ```
 ## Crontab работает
 
